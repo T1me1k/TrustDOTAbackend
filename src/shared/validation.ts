@@ -1,0 +1,2 @@
+import { z } from 'zod';import { DOTA_ROLES,REGIONS } from '../config/constants.js';
+export const roleSchema=z.enum(DOTA_ROLES);export const regionSchema=z.enum(REGIONS);export const devAuthSchema=z.object({displayName:z.string().min(2).max(40)});export const joinQueueSchema=z.object({region:regionSchema,primaryRole:roleSchema,secondaryRole:roleSchema}).refine(v=>v.primaryRole!==v.secondaryRole,{message:'Roles must be different',path:['secondaryRole']});

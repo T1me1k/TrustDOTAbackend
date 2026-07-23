@@ -1,0 +1,13 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: trust
+      POSTGRES_PASSWORD: trust
+      POSTGRES_DB: trust
+    ports:
+      - '5432:5432'
+    volumes:
+      - trust_postgres:/var/lib/postgresql/data
+volumes:
+  trust_postgres:
