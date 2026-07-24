@@ -36,9 +36,9 @@ describe('production frontend backend readiness', () => {
     expect(app).toContain("readCfg(database, 'matchmaking_enabled'");
   });
 
-  it('keeps migration journal on the single initial migration', async () => {
+  it('keeps the complete migration journal', async () => {
     const journal = JSON.parse(await readFile('src/db/migrations/meta/_journal.json', 'utf8'));
-    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual(['0000_initial']);
+    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual(['0000_initial', '0001_narrow_marvel_boy']);
   });
 
   it('prints the idempotent seed completion message for repeatable seed checks', async () => {
