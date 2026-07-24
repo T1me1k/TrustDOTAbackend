@@ -5,4 +5,10 @@ for(const [key,value,isPublic,description] of configs)await db.insert(runtimeCon
 for(const f of ['socket_notifications','patch_notes'])await db.insert(featureFlags).values({key:f,enabled:true,description:`${f} feature`}).onConflictDoNothing();
 for(let i=1;i<=25;i++){const role=DOTA_ROLES[i%DOTA_ROLES.length]!;const [bot]=await db.insert(players).values({steamId:`bot:${i}`,displayName:`TRUST Bot ${i}`,isBot:true,rating:850+i*18,trustScore:70+(i%25),regions:[REGIONS[i%REGIONS.length]!],preferredRole:role}).onConflictDoUpdate({target:players.steamId,set:{displayName:`TRUST Bot ${i}`,isBot:true}}).returning();for(const [idx,r] of DOTA_ROLES.entries())await db.insert(playerRoles).values({playerId:bot!.id,role:r,priority:r===role?1:idx+2}).onConflictDoNothing();}
 await db.insert(patches).values({version:'0.1.0-draft',title:{en:'TRUST Backend Foundation',ru:'Основа TRUST Backend'},summary:{en:'Initial backend draft.',ru:'Первая версия backend.'},changelog:{en:'Persistent accounts and matchmaking.',ru:'Постоянные аккаунты и матчмейкинг.'},status:'draft'}).onConflictDoNothing();
-await pool.end();console.log('Seed completed idempotently');
+console.log('Seed completed idempotently');
+
+const demoData={baseStrength:20,strengthGain:2,baseAgility:20,agilityGain:2,baseIntelligence:20,intelligenceGain:2,baseHealth:120,healthRegen:0.5,baseMana:75,manaRegen:0.5,armor:2,magicResistance:25,moveSpeed:300,turnRate:0.6,attackRange:150,baseAttackTime:1.7,attackPoint:0.3,projectileSpeed:0,damageMin:25,damageMax:30,dayVision:1800,nightVision:800,collisionSize:24,customValues:[]};
+for(const hero of [{slug:'trust-vanguard',nameEn:'TRUST Vanguard',nameRu:'Авангард TRUST',attribute:'strength'},{slug:'trust-ranger',nameEn:'TRUST Ranger',nameRu:'Следопыт TRUST',attribute:'agility'}])await db.execute({sql:`insert into balance_heroes(slug,name_en,name_ru,primary_attribute,attack_type,roles,tags,status,sort_order,current_data,created_by,updated_by) values($1,$2,$3,$4,$5,$6,$7,'hidden',$8,$9,'seed','seed') on conflict(slug) do nothing`,params:[hero.slug,hero.nameEn,hero.nameRu,hero.attribute,hero.attribute==='strength'?'melee':'ranged',['Carry'],['demo'],1000,demoData]} as any);
+console.log('Balance seed completed idempotently');
+
+await pool.end();
