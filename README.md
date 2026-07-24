@@ -1,6 +1,6 @@
 # TRUST Dota 2 Backend
 
-First-stage backend for TRUST Dota 2: Fastify REST API, Socket.IO, PostgreSQL/Drizzle schema, runtime configuration, mock matchmaking utilities, bootstrap admin API, and Railway-ready deployment. Steam OpenID, Dota API, payments, tournaments, anticheat, ML matchmaking, email, frontend, and admin UI are intentionally left for later stages.
+First-stage backend for TRUST Dota 2: Fastify REST API, Socket.IO, PostgreSQL/Drizzle schema, runtime configuration, server-side PostgreSQL matchmaking, bootstrap admin API, and Railway-ready deployment. Steam OpenID, Dota API, payments, tournaments, anticheat, ML matchmaking, email, frontend, and admin UI are intentionally left for later stages.
 
 ## Architecture
 
@@ -38,6 +38,7 @@ Public/system:
 - `GET /v1/config/public`
 
 Auth:
+- `POST /v1/auth/guest` (MVP guest session, rate limited)
 - `POST /v1/auth/dev` (unsafe temporary mode, requires `ALLOW_DEV_AUTH=true`)
 - `POST /v1/auth/logout`
 - `GET /v1/me`
@@ -69,7 +70,7 @@ Socket.IO server events: `queue:updated`, `match:found`, `match:acceptance_updat
 
 ```bash
 curl http://localhost:4000/health
-curl -i -c cookies.txt -H 'Content-Type: application/json' -d '{"displayName":"VoidLegacy"}' http://localhost:4000/v1/auth/dev
+curl -i -c cookies.txt -X POST http://localhost:4000/v1/auth/guest
 curl -b cookies.txt http://localhost:4000/v1/me
 curl -b cookies.txt -H 'Content-Type: application/json' -d '{"region":"EU West","primaryRole":"Mid","secondaryRole":"Soft Support"}' http://localhost:4000/v1/queue/join
 curl -b cookies.txt http://localhost:4000/v1/queue/status
@@ -88,13 +89,15 @@ See `.env.example` for the full list. Required secrets:
 Production safety:
 - `ALLOW_DEV_AUTH=false`
 - `MATCHMAKING_BOT_FILL=false`
+- `DEMO_MATCHMAKING_ENABLED=false` unless demo bot-filled matches are explicitly needed
+- `GUEST_AUTH_ENABLED=true` for MVP frontend login
 - `CORS_ORIGINS` must contain only trusted Vercel/Railway frontend origins.
 
 ## Railway deployment
 
 1. Create a Railway project and add a PostgreSQL service.
 2. Link the backend service to the PostgreSQL service and set `DATABASE_URL` from Railway's provided connection string.
-3. Add `NODE_ENV=production`, `PORT`, `FRONTEND_URL`, `CORS_ORIGINS`, `SESSION_SECRET`, `ADMIN_API_KEY`, `ALLOW_DEV_AUTH=false`, `MATCHMAKING_ENABLED=true`, `MATCHMAKING_BOT_FILL=false`, timing variables, and `LOG_LEVEL=info`.
+3. Add `NODE_ENV=production`, `PORT`, `FRONTEND_URL`, `CORS_ORIGINS`, `SESSION_SECRET`, `ADMIN_API_KEY`, `ALLOW_DEV_AUTH=false`, `GUEST_AUTH_ENABLED=true`, `MATCHMAKING_ENABLED=true`, `MATCHMAKING_BOT_FILL=false`, `DEMO_MATCHMAKING_ENABLED=false`, timing variables, and `LOG_LEVEL=info`.
 4. Build command: Dockerfile build (or `npm ci && npm run build`).
 5. Start command: `npm start`.
 6. Healthcheck path: `/health`.
@@ -103,6 +106,15 @@ Production safety:
 9. Connect GitHub and deploy through PR/main updates; never push secrets.
 10. View logs in Railway Deployments or `railway logs`.
 11. Run migrations with `npm run db:migrate` as a one-off Railway command before/with deployment.
-12. Disable mock bots with `MATCHMAKING_BOT_FILL=false` and `runtime_config.bot_fill_enabled=false`.
+12. Keep transparent bot fill disabled in production with `DEMO_MATCHMAKING_ENABLED=false` and `runtime_config.bot_fill_enabled=false`; enable it only for isolated demos.
 13. Rotate `ADMIN_API_KEY` by updating the variable and redeploying.
 14. Create `SESSION_SECRET` with `openssl rand -base64 48`; do not reuse development values.
+
+## Production frontend notes
+
+- Production guest sessions are signed, `httpOnly`, `secure`, and `SameSite=None`; development uses `SameSite=Lax`.
+- Queue join/cancel/status, match creation, accept, and decline are persisted in PostgreSQL. The frontend must not submit a `playerId`; the backend derives the player from the signed session cookie.
+- `/health` only reports process health. `/ready` verifies PostgreSQL connectivity and required tables without returning secrets.
+- Admin APIs accept `ADMIN_API_KEY` only via `Authorization: Bearer ...`; responses must not expose secret environment values.
+- Seed is idempotent and should finish with `Seed completed idempotently`; running it repeatedly must not delete production data.
+
