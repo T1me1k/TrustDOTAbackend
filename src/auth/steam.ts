@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 export const STEAM_PROVIDER = 'https://steamcommunity.com/openid';
+export const STEAM_ENDPOINT = 'https://steamcommunity.com/openid/login';
 export const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
@@ -18,7 +19,20 @@ export function buildSteamRedirect(realm: string, returnUrl: string, state: stri
     'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
     'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select',
   });
-  return `${STEAM_PROVIDER}/login?${query}`;
+  return `${STEAM_ENDPOINT}?${query}`;
+}
+
+function normalizeEndpoint(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  try {
+    const url = new URL(value);
+    if (url.search || url.hash || url.username || url.password) return null;
+    url.pathname = url.pathname.replace(/\/+$/, '');
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function verifySteamResponse(query: Record<string, unknown>, returnUrl: string, fetcher: typeof fetch = fetch) {
@@ -27,10 +41,13 @@ export async function verifySteamResponse(query: Record<string, unknown>, return
   const steamId64 = steamIdFromClaimedId(claimed);
   if (!steamId64 || query['openid.identity'] !== claimed) return null;
   const expected = new URL(returnUrl); expected.searchParams.set('state', String(query.state ?? ''));
-  if (query['openid.return_to'] !== expected.toString() || query['openid.op_endpoint'] !== STEAM_PROVIDER) return null;
+  if (
+    query['openid.return_to'] !== expected.toString()
+    || normalizeEndpoint(query['openid.op_endpoint']) !== normalizeEndpoint(STEAM_ENDPOINT)
+  ) return null;
   const form = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (key.startsWith('openid.')) form.set(key, String(value));
   form.set('openid.mode', 'check_authentication');
-  const response = await fetcher(`${STEAM_PROVIDER}/login`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form });
+  const response = await fetcher(STEAM_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form });
   return response.ok && /(?:^|\n)is_valid:true(?:\n|$)/.test(await response.text()) ? steamId64 : null;
 }
