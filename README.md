@@ -52,6 +52,10 @@ Matches:
 - `GET /v1/matches/:id`
 - `POST /v1/matches/:id/accept`
 - `POST /v1/matches/:id/decline`
+- `POST /v1/matches/:id/connection/start` starts **TRUST lobby readiness** (it does not create or claim to create an official Dota lobby)
+- `POST /v1/matches/:id/connection/ready`
+- `GET /v1/me/state` restores the authoritative active match/queue/idle state
+- `GET /v1/me/matches?cursor=<ISO timestamp>&limit=20`
 
 Admin (`Authorization: Bearer <ADMIN_API_KEY>`):
 - `GET /v1/admin/dashboard`
@@ -61,10 +65,44 @@ Admin (`Authorization: Bearer <ADMIN_API_KEY>`):
 - `PATCH /v1/admin/feature-flags/:key`
 - `GET /v1/admin/queues`
 - `GET /v1/admin/matches`
+- `GET /v1/admin/matches/:id`
+- `POST /v1/admin/matches/:id/start`
+- `POST /v1/admin/matches/:id/complete`
 - `POST /v1/admin/matches/:id/cancel`
+- `GET /v1/admin/stats?range=24h|7d|30d`
 - `GET /v1/admin/audit`
 
-Socket.IO server events: `queue:updated`, `match:found`, `match:acceptance_updated`, `match:ready`, `match:cancelled`, `config:updated`, `maintenance:updated`. Rooms are `player:<playerId>`, `match:<matchId>`, and `public-config`.
+Socket.IO server events: `queue:updated`, `match:found`, `match:acceptance_updated`, `match:ready`, `match:connecting`, `match:connection_updated`, `match:started`, `match:completed`, `match:cancelled`, `rating:updated`, `trust:updated`, `config:updated`, `maintenance:updated`. Rooms are `player:<playerId>`, `match:<matchId>`, and `public-config`.
+
+## Authoritative match lifecycle
+
+The backend is the sole source of match status, result, TRUST Rating and Trust Score. Clients render the normalized DTO and server events; they must never infer a transition or calculate a result locally.
+
+```text
+accepting --all accept--> ready --TRUST readiness--> connecting --all connected/admin--> in_progress --admin result--> completed
+     |                       |                         |                                      |
+     +--decline/timeout------+-connection/admin--------+----------------admin + reason--------+--> cancelled
+```
+
+Every critical transition locks the match row with `SELECT ... FOR UPDATE`, runs in one PostgreSQL transaction, and increments `matches.version` using an optimistic version predicate. Unsupported edges return HTTP 409 with `INVALID_MATCH_TRANSITION`. Bots accept automatically and become connected automatically. Timeout/decline penalties and completion rewards use unique immutable event keys, so retries do not apply values twice. Innocent accepted players are requeued with their saved regions and role only when they are active, unsanctioned, not already queued, and not in another active match.
+
+## TRUST Rating and Trust Score
+
+TRUST Rating uses deterministic team Elo. For team-average ratings `Rr` and `Rd`, radiant's expected score is `Er = 1 / (1 + 10^((Rd-Rr)/400))`; the raw change is `32 * (Sr-Er)`, rounded and clamped to `[-32,32]`. Dire receives the exact negative, producing zero-sum team deltas; bots are excluded from persistent updates. `rating_events(match_id, player_id, reason)` prevents double awards.
+
+Trust Score is clamped to 0–100: decline `-2`, accept timeout `-3`, connection failure/abandon `-5`, and a clean successful completion `+1`. Winning or losing does not itself affect Trust Score. Every change has an immutable, uniquely keyed `trust_event`.
+
+## Lifecycle migration and Railway rollout
+
+Migration `0002_bitter_morlocks.sql` adds lifecycle timestamps, result metadata, connection state, optimistic versioning, checks, indexes, and rating/trust idempotency indexes with non-destructive defaults. Deploy schema before application code; never run destructive reset commands against production:
+
+```bash
+railway run npm ci
+railway run npm run db:migrate
+railway run npm run db:seed   # optional, repeatable reference data/bots only
+```
+
+Manual E2E: sign in through Steam; join ten users (or explicitly enabled demo bots); accept each match and verify the tenth accept yields `ready`; let the worker enter `connecting`; call each participant's readiness endpoint and verify `in_progress`; complete through the admin endpoint with a coherent score; then verify `/v1/me/state`, history, rating/trust events, dashboard, audit IP/reason, and that repeating the identical completion is idempotent while a different result returns 409. Separately decline one accepting match and let another expire to verify one penalty and safe innocent requeue on repeated worker cycles.
 
 ## Curl examples
 
