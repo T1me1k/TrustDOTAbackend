@@ -38,7 +38,7 @@ describe('production frontend backend readiness', () => {
 
   it('keeps the complete migration journal', async () => {
     const journal = JSON.parse(await readFile('src/db/migrations/meta/_journal.json', 'utf8'));
-    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual(['0000_initial', '0001_narrow_marvel_boy', '0002_bitter_morlocks']);
+    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual(['0000_initial', '0001_narrow_marvel_boy', '0002_bitter_morlocks', '0003_balance_studio']);
   });
 
   it('prints the idempotent seed completion message for repeatable seed checks', async () => {

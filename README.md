@@ -181,3 +181,37 @@ Set `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_API_KEY`, `STEAM_API_KEY`, `STEAM_R
 2. Confirm the browser is sent only to `steamcommunity.com/openid`, sign in, and accept.
 3. Confirm callback redirects to the configured frontend `/profile` and `GET /v1/me` returns the Steam profile with a session cookie.
 4. Reuse the callback URL and confirm it fails with `STEAM_STATE_INVALID`; logout and confirm `/v1/me` returns 401.
+
+## TRUST Balance Studio
+
+TRUST Balance Studio is a hidden administrative editor for the balance and rules of the **TRUST custom game mode**. It does not modify, publish to, or make claims about Valve's official Dota 2 client or servers.
+
+### Data model and safety
+
+Migration `0003_balance_studio.sql` adds `balance_heroes`, `balance_abilities`, `balance_facets`, `balance_talents`, `balance_upgrades`, `balance_patches`, `balance_patch_entries`, `balance_snapshots`, and `balance_import_jobs`. Hero and ability values are validated with typed Zod schemas; values must be finite and stored content is never evaluated as JavaScript. Published patch entries are protected by a database trigger. Matches receive immutable nullable `balance_patch_id` and `balance_patch_version` values when created.
+
+The patch workflow is `draft → in_review → approved → scheduled/published → superseded`. Review can return a patch to draft. Publishing uses a transaction, optimistic `rowVersion`, a PostgreSQL advisory lock, snapshots, validation, audit events, and idempotent handling. Rollback creates a new compensating draft and never deletes history. The worker safely processes due scheduled patches independently.
+
+### Roles
+
+The authorization boundary is prepared for `owner`, `balance_editor`, `reviewer`, `publisher`, and `viewer`. The existing bearer-key administrator is treated as bootstrap `owner`, preserving the existing admin login. The server-side `ADMIN_API_KEY` must never be shipped to a browser. Viewer access is read-only; editors manage heroes and drafts; reviewers submit/return review; publishers approve/schedule/publish; owners additionally import and roll back.
+
+### APIs
+
+Admin routes are under `/v1/admin/balance`: dashboard; hero and ability CRUD/archive/restore/duplicate; facet, talent, and upgrade CRUD; patch/entry CRUD, diff, validation and all workflow actions; versioned import validation/apply; export; and balance audit. They use the existing admin protection. Public read-only endpoints are `/v1/public/balance/current`, `/v1/public/balance/heroes[/:slug]`, and `/v1/public/patches[/:slug][/diff]`. Public queries only expose published production patch notes and active data, never drafts, identities, or audit records.
+
+### Versioned import
+
+The import format is version `1.0`; see [`src/balance/import-template.v1.json`](src/balance/import-template.v1.json). Submit the exact payload to `/import/validate`, then include its returned job id as `dryRunJobId` in the unchanged payload sent to `/import/apply`. Payloads are limited to 1 MB, row errors include indices, hashes prevent mismatched/replayed dry runs, and no executable code is supported.
+
+### Railway migrations and seed
+
+The runtime image includes `src/db/migrations` and Drizzle's journal. With `DATABASE_URL`, `SESSION_SECRET`, and `ADMIN_API_KEY` configured, run:
+
+```sh
+npm run db:migrate
+npm run db:seed
+npm start
+```
+
+Both database commands are safe to repeat. Successful runs print `Balance migrations completed` and `Balance seed completed idempotently`. The seed creates only two hidden TRUST demonstration heroes; use the import template for a full custom roster. Builds and deploys never download Valve data or images.
