@@ -112,9 +112,34 @@ Production safety:
 
 ## Production frontend notes
 
-- Production guest sessions are signed, `httpOnly`, `secure`, and `SameSite=None`; development uses `SameSite=Lax`.
+- Session tokens are opaque and stored only as hashes; cookies are `HttpOnly`, `Secure` in production, and `SameSite=Lax`.
 - Queue join/cancel/status, match creation, accept, and decline are persisted in PostgreSQL. The frontend must not submit a `playerId`; the backend derives the player from the signed session cookie.
 - `/health` only reports process health. `/ready` verifies PostgreSQL connectivity and required tables without returning secrets.
 - Admin APIs accept `ADMIN_API_KEY` only via `Authorization: Bearer ...`; responses must not expose secret environment values.
 - Seed is idempotent and should finish with `Seed completed idempotently`; running it repeatedly must not delete production data.
 
+
+## Steam accounts and persistent sessions
+
+Sessions are stored in PostgreSQL as SHA-256 token hashes. Cookies are `HttpOnly`, `Secure` in production, `SameSite=Lax`, and scoped to `/`. Steam login uses OpenID 2.0 server-side verification and the Steam Web API only for public profile metadata. Passwords and API keys are never returned or stored.
+
+### Account and patch endpoints
+
+- `GET /v1/auth/steam/start`, `GET /v1/auth/steam/callback`
+- `POST /v1/auth/logout`, `POST /v1/auth/logout-all`
+- `GET /v1/me`, `PATCH /v1/me/preferences`, `GET /v1/me/matches`
+- `GET /v1/players/:id/profile`, `GET /v1/patches/current`
+- Admin: players/details/trust score, sanctions, patches CRUD/publish/archive, config, flags, queues, matches and audit.
+
+Queue join accepts only `{"regions":["EU West","EU East"],"primaryRole":"Mid"}`. One to three unique enabled regions are required; the matcher deterministically chooses one region shared by every participant.
+
+### Railway variables
+
+Set `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_API_KEY`, `STEAM_API_KEY`, `STEAM_REALM=https://trustdotabackend-production.up.railway.app`, `STEAM_RETURN_URL=https://trustdotabackend-production.up.railway.app/v1/auth/steam/callback`, `SESSION_TTL_SECONDS=604800`, `REQUIRE_STEAM_FOR_MATCHMAKING=true`, `GUEST_AUTH_ENABLED=true`, `FRONTEND_URL`, and `CORS_ORIGINS`. Register the exact realm and callback with the deployed service. Never commit their production values.
+
+### Manual Steam check
+
+1. Run migrations, then open `/v1/auth/steam/start` in a browser.
+2. Confirm the browser is sent only to `steamcommunity.com/openid`, sign in, and accept.
+3. Confirm callback redirects to the configured frontend `/profile` and `GET /v1/me` returns the Steam profile with a session cookie.
+4. Reuse the callback URL and confirm it fails with `STEAM_STATE_INVALID`; logout and confirm `/v1/me` returns 401.
