@@ -16,11 +16,12 @@ import { allowedRatingRange, balanceTeams, selectMatchRegion, type Candidate } f
 import { buildSteamRedirect, randomToken, sha256, verifySteamResponse } from './auth/steam.js';
 import { MatchLifecycleService, type Completion } from './services/match-lifecycle.js';
 import { registerBalanceRoutes } from './balance/routes.js';
+import { registerGameSessionRoutes } from './game-sessions/routes.js';
 import { BalancePatchService } from './balance/service.js';
 
 type Database = ReturnType<typeof createDatabase>;
 type Deps = { env: Env; db?: Database };
-const requiredTables = ['players', 'sessions', 'steam_auth_states', 'queue_entries', 'matches', 'match_players', 'runtime_config', 'feature_flags', 'audit_logs'];
+const requiredTables = ['players', 'sessions', 'steam_auth_states', 'queue_entries', 'matches', 'match_players', 'game_sessions', 'game_session_events', 'runtime_config', 'feature_flags', 'audit_logs'];
 
 export async function buildApp({ env, db: createDb }: Deps) {
   const database = createDb ?? createDatabase(env);
@@ -71,6 +72,7 @@ export async function buildApp({ env, db: createDb }: Deps) {
 
   function isAdmin(req: any) { const h = String(req.headers.authorization ?? ''); const token = h.startsWith('Bearer ') ? h.slice(7) : ''; const a = Buffer.from(token); const b = Buffer.from(env.ADMIN_API_KEY); return a.length === b.length && timingSafeEqual(a, b); }
   app.addHook('preHandler', async (req) => { if (req.url.startsWith('/v1/admin') && !isAdmin(req)) throw new ApiError(401, 'ADMIN_UNAUTHORIZED', 'Admin authentication required'); });
+  registerGameSessionRoutes(app,database.pool,lifecycle);
   registerBalanceRoutes(app,database.pool);
   app.get('/v1/admin/dashboard', async () => adminDashboard(database));
   app.get('/v1/admin/stats',async(req:any)=>adminStats(database,String(req.query?.range??'24h')));

@@ -11,6 +11,8 @@ describe('production frontend backend readiness', () => {
 
   it('has guest auth, queue, match accept/decline, and admin endpoints', async () => {
     const app = await readFile('src/app.ts', 'utf8');
+    const gameSessionRoutes = await readFile('src/game-sessions/routes.ts', 'utf8');
+    const registeredRoutes = `${app}\n${gameSessionRoutes}`;
     const endpoints = [
       '/v1/auth/guest',
       '/v1/me',
@@ -21,9 +23,11 @@ describe('production frontend backend readiness', () => {
       '/v1/matches/:id/accept',
       '/v1/matches/:id/decline',
       '/v1/admin/dashboard',
+      '/v1/game-sessions/bootstrap',
+      '/v1/admin/matches/:id/game-session',
     ];
     for (const endpoint of endpoints) {
-      expect(app).toContain(endpoint);
+      expect(registeredRoutes).toContain(endpoint);
     }
     expect(app).toContain('rateLimit: { max: 10');
     expect(app).toContain('headers.authorization');
@@ -46,6 +50,7 @@ describe('production frontend backend readiness', () => {
       '0001_narrow_marvel_boy',
       '0002_bitter_morlocks',
       '0003_balance_studio',
+      '0004_game_sessions',
     ]);
   });
 
