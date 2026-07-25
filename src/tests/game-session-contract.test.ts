@@ -34,7 +34,7 @@ describe('game session contract', () => {
     })).not.toThrow();
   });
 
-  it('rejects an inconsistent winner and score', () => {
+  it('accepts the Ancient winner independently of kill count', () => {
     expect(() => validateGameResult({
       resultId: 'result-0002',
       winner: 'dire',
@@ -42,6 +42,17 @@ describe('game session contract', () => {
       direScore: 31,
       durationSeconds: 2518,
       rosterSteamIds: roster,
+    })).not.toThrow();
+  });
+
+  it('rejects a malformed or incomplete Steam roster', () => {
+    expect(() => validateGameResult({
+      resultId: 'result-0003',
+      winner: 'dire',
+      radiantScore: 42,
+      direScore: 31,
+      durationSeconds: 2518,
+      rosterSteamIds: roster.slice(0, 9),
     })).toThrow();
   });
 });
