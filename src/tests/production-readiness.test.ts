@@ -32,6 +32,8 @@ describe('production frontend backend readiness', () => {
     expect(app).toContain('rateLimit: { max: 10');
     expect(app).toContain('headers.authorization');
     expect(app).toContain('ADMIN_API_KEY');
+    expect(app).toContain("new ApiError(400, 'VALIDATION_ERROR'");
+    expect(app).toContain('err instanceof ZodError');
   });
 
   it('gates bot fill and matchmaking with env/config flags', async () => {
