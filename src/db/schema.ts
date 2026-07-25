@@ -43,6 +43,54 @@ export const patches = pgTable('patches', { id: uuid('id').primaryKey().defaultR
 export const sanctions = pgTable('sanctions', { id: uuid('id').primaryKey().defaultRandom(), playerId: uuid('player_id').references(() => players.id).notNull(), type: text('type').notNull(), reason: text('reason').notNull(), expiresAt: timestamp('expires_at', { withTimezone: true }), createdBy: text('created_by').notNull(), createdAt: createdAt(), revokedAt: timestamp('revoked_at', { withTimezone: true }) }, (t) => ({ active: index('sanctions_active_idx').on(t.playerId, t.revokedAt) }));
 export const auditLogs = pgTable('audit_logs', { id: uuid('id').primaryKey().defaultRandom(), actorType: text('actor_type').notNull(), actorId: text('actor_id').notNull(), action: text('action').notNull(), entityType: text('entity_type').notNull(), entityId: text('entity_id').notNull(), oldValue: jsonb('old_value'), newValue: jsonb('new_value'), ipAddress: text('ip_address'), createdAt: createdAt() }, (t) => ({ created: index('audit_created_idx').on(t.createdAt) }));
 
+
+export const gameSessions = pgTable('game_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  matchId: uuid('match_id').references(() => matches.id, { onDelete: 'cascade' }).notNull(),
+  tokenHash: text('token_hash').notNull(),
+  status: text('status').notNull().default('issued'),
+  verificationMode: text('verification_mode').notNull().default('unverified_valve_hosted'),
+  expectedRoster: jsonb('expected_roster').notNull(),
+  balancePatchVersion: text('balance_patch_version'),
+  serverState: text('server_state'),
+  serverMetadata: jsonb('server_metadata').notNull().default({}),
+  heartbeatPayload: jsonb('heartbeat_payload').notNull().default({}),
+  resultId: text('result_id'),
+  resultPayload: jsonb('result_payload'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  bootstrappedAt: timestamp('bootstrapped_at', { withTimezone: true }),
+  lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+  resultSubmittedAt: timestamp('result_submitted_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revocationReason: text('revocation_reason'),
+  createdBy: text('created_by').notNull(),
+  createdAt: createdAt(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  rowVersion: integer('row_version').notNull().default(1),
+}, (t) => ({
+  token: uniqueIndex('game_sessions_token_hash_idx').on(t.tokenHash),
+  result: uniqueIndex('game_sessions_result_id_idx').on(t.resultId).where(sql`${t.resultId} is not null`),
+  activeMatch: uniqueIndex('game_sessions_one_active_match_idx').on(t.matchId).where(sql`${t.status} in ('issued','active','result_pending')`),
+  statusExpiry: index('game_sessions_status_expiry_idx').on(t.status, t.expiresAt),
+  statusCheck: check('game_sessions_status_check', sql`${t.status} in ('issued','active','result_pending','completed','expired','revoked')`),
+  verificationCheck: check('game_sessions_verification_check', sql`${t.verificationMode} in ('unverified_valve_hosted')`),
+  rowVersionCheck: check('game_sessions_row_version_check', sql`${t.rowVersion} > 0`),
+}));
+
+export const gameSessionEvents = pgTable('game_session_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').references(() => gameSessions.id, { onDelete: 'cascade' }).notNull(),
+  eventId: text('event_id').notNull(),
+  type: text('type').notNull(),
+  payload: jsonb('payload').notNull().default({}),
+  createdAt: createdAt(),
+}, (t) => ({
+  idempotency: uniqueIndex('game_session_events_idempotency_idx').on(t.sessionId, t.eventId),
+  timeline: index('game_session_events_timeline_idx').on(t.sessionId, t.createdAt),
+  typeCheck: check('game_session_events_type_check', sql`${t.type} in ('lobby_created','player_connected','player_disconnected','game_started','game_state','game_ended','diagnostic')`),
+}));
+
 const balanceBase = { id: uuid('id').primaryKey().defaultRandom(), createdAt: createdAt(), updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull() };
 export const balanceHeroes = pgTable('balance_heroes', { ...balanceBase, externalId: text('external_id'), slug: text('slug').notNull().unique(), nameEn: text('name_en').notNull(), nameRu: text('name_ru').notNull(), shortName: text('short_name'), primaryAttribute: text('primary_attribute').notNull(), attackType: text('attack_type').notNull(), roles: text('roles').array().notNull().default([]), tags: text('tags').array().notNull().default([]), portraitUrl: text('portrait_url'), iconUrl: text('icon_url'), status: text('status').notNull().default('active'), sortOrder: integer('sort_order').notNull().default(0), currentData: jsonb('current_data').notNull(), createdBy: text('created_by').notNull(), updatedBy: text('updated_by').notNull(), rowVersion: integer('row_version').notNull().default(1) });
 export const balanceAbilities = pgTable('balance_abilities', { ...balanceBase, heroId: uuid('hero_id').references(()=>balanceHeroes.id).notNull(), slug: text('slug').notNull(), nameEn:text('name_en').notNull(), nameRu:text('name_ru').notNull(), descriptionEn:text('description_en').notNull(), descriptionRu:text('description_ru').notNull(), type:text('type').notNull(), slot:integer('slot').notNull(), maxLevel:integer('max_level').notNull(), behavior:text('behavior').array().notNull().default([]), damageType:text('damage_type').notNull(), targetType:text('target_type').array().notNull().default([]), dispelType:text('dispel_type'), piercesDebuffImmunity:boolean('pierces_debuff_immunity').notNull().default(false), iconUrl:text('icon_url'), status:text('status').notNull().default('active'), abilityData:jsonb('ability_data').notNull(), rowVersion:integer('row_version').notNull().default(1) });
