@@ -50,16 +50,32 @@ describe('production frontend backend readiness', () => {
     expect(seed).not.toMatch(/db\.execute\(\s*\{\s*sql/);
   });
 
+
+  it('uses compiled production database commands and packages one migration directory', async () => {
+
   it('uses compiled production database commands and packages migrations into dist', async () => {
+
     const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
     expect(packageJson.scripts['db:migrate']).toBe('node dist/db/migrate.js');
     expect(packageJson.scripts['db:seed']).toBe('node dist/db/seed.js');
     expect(packageJson.scripts['db:migrate:dev']).toBe('tsx src/db/migrate.ts');
     expect(packageJson.scripts['db:seed:dev']).toBe('tsx src/db/seed.ts');
+
+    expect(packageJson.scripts.build).toContain('db:migrations:check');
+    expect(packageJson.scripts['db:migrations:check']).toBe('node scripts/check-migrations.mjs');
+
+    const dockerfile = await readFile('Dockerfile', 'utf8');
+    expect(dockerfile).toContain('COPY scripts ./scripts');
+    expect(dockerfile).toContain('npm ci --omit=dev');
+    expect(dockerfile).toContain('COPY --from=build /app/dist ./dist');
+    expect(dockerfile).toContain('COPY --from=build /app/src/db/migrations ./src/db/migrations');
+    expect(dockerfile).toContain('RUN test -f /app/src/db/migrations/meta/_journal.json');
+
     expect(packageJson.scripts.build).toContain('scripts/copy-migrations.mjs');
 
     const dockerfile = await readFile('Dockerfile', 'utf8');
     expect(dockerfile).toContain('npm ci --omit=dev');
     expect(dockerfile).toContain('COPY --from=build /app/dist ./dist');
+
   });
 });
