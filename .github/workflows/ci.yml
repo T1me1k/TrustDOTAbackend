@@ -6,6 +6,10 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://trust:trust@localhost:5432/trust
+      SESSION_SECRET: ci-session-secret-at-least-32-characters
+      ADMIN_API_KEY: ci-admin-api-key-at-least-32-characters
     services:
       postgres:
         image: postgres:16
