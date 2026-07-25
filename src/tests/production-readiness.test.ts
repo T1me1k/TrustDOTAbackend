@@ -11,7 +11,7 @@ describe('production frontend backend readiness', () => {
 
   it('has guest auth, queue, match accept/decline, and admin endpoints', async () => {
     const app = await readFile('src/app.ts', 'utf8');
-    for (const endpoint of [
+    const endpoints = [
       '/v1/auth/guest',
       '/v1/me',
       '/v1/auth/logout',
@@ -21,7 +21,10 @@ describe('production frontend backend readiness', () => {
       '/v1/matches/:id/accept',
       '/v1/matches/:id/decline',
       '/v1/admin/dashboard',
-    ]) expect(app).toContain(endpoint);
+    ];
+    for (const endpoint of endpoints) {
+      expect(app).toContain(endpoint);
+    }
     expect(app).toContain('rateLimit: { max: 10');
     expect(app).toContain('headers.authorization');
     expect(app).toContain('ADMIN_API_KEY');
@@ -38,7 +41,12 @@ describe('production frontend backend readiness', () => {
 
   it('keeps the complete migration journal', async () => {
     const journal = JSON.parse(await readFile('src/db/migrations/meta/_journal.json', 'utf8'));
-    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual(['0000_initial', '0001_narrow_marvel_boy', '0002_bitter_morlocks', '0003_balance_studio']);
+    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual([
+      '0000_initial',
+      '0001_narrow_marvel_boy',
+      '0002_bitter_morlocks',
+      '0003_balance_studio',
+    ]);
   });
 
   it('prints the idempotent seed completion message for repeatable seed checks', async () => {
@@ -46,5 +54,22 @@ describe('production frontend backend readiness', () => {
     expect(seed).toContain('onConflictDoUpdate');
     expect(seed).toContain('onConflictDoNothing');
     expect(seed).toContain('Seed completed idempotently');
+    expect(seed).toContain('db.insert(balanceHeroes)');
+    expect(seed).not.toMatch(/db\.execute\(\s*\{\s*sql/);
+  });
+
+  it('uses compiled production database commands and packages migrations', async () => {
+    const packageJson = JSON.parse(await readFile('package.json', 'utf8'));
+    expect(packageJson.scripts['db:migrate']).toBe('node dist/db/migrate.js');
+    expect(packageJson.scripts['db:seed']).toBe('node dist/db/seed.js');
+    expect(packageJson.scripts['db:migrate:dev']).toBe('tsx src/db/migrate.ts');
+    expect(packageJson.scripts['db:seed:dev']).toBe('tsx src/db/seed.ts');
+    expect(packageJson.scripts.build).toContain('node scripts/copy-migrations.mjs');
+
+    const dockerfile = await readFile('Dockerfile', 'utf8');
+    expect(dockerfile).toContain('COPY scripts ./scripts');
+    expect(dockerfile).toContain('npm ci --omit=dev');
+    expect(dockerfile).toContain('COPY --from=build /app/dist ./dist');
+    expect(dockerfile).toContain('RUN test -f /app/dist/db/migrations/meta/_journal.json');
   });
 });
