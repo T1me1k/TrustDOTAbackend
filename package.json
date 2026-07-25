@@ -7,13 +7,19 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+
     "build": "tsc -p tsconfig.json && npm run db:migrations:check",
+
+    "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs",
+
     "start": "node dist/index.js",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
+
     "db:migrations:check": "node scripts/check-migrations.mjs",
+
     "db:migrate": "node dist/db/migrate.js",
     "db:seed": "node dist/db/seed.js",
     "db:migrate:dev": "tsx src/db/migrate.ts",
