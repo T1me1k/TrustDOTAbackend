@@ -51,6 +51,7 @@ describe('production frontend backend readiness', () => {
       '0002_bitter_morlocks',
       '0003_balance_studio',
       '0004_game_sessions',
+      '0005_multi_role_matchmaking',
     ]);
   });
 

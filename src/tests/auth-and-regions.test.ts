@@ -4,9 +4,11 @@ import {commonRegions,selectMatchRegion} from '../worker/matcher.js';
 import {buildSteamRedirect,sha256,STEAM_ENDPOINT,steamIdFromClaimedId,verifySteamResponse} from '../auth/steam.js';
 
 describe('queue regions',()=>{
-  it.each([["EU West"],["EU West","EU East"],["EU West","EU East","SEA"]])('accepts 1-3 regions',(...regions)=>expect(joinQueueSchema.parse({regions,primaryRole:'Mid'}).regions).toEqual(regions));
-  it('rejects four and duplicate regions',()=>{expect(()=>joinQueueSchema.parse({regions:['EU West','EU East','SEA','US East'],primaryRole:'Mid'})).toThrow();expect(()=>joinQueueSchema.parse({regions:['EU West','EU West'],primaryRole:'Mid'})).toThrow()});
-  it('rejects secondaryRole',()=>expect(()=>joinQueueSchema.parse({regions:['EU West'],primaryRole:'Mid',secondaryRole:'Carry'})).toThrow());
+  it.each([["EU West"],["EU West","EU East"],["EU West","EU East","SEA"]])('accepts 1-3 regions',(...regions)=>expect(joinQueueSchema.parse({regions,roles:['Mid']}).regions).toEqual(regions));
+  it.each([[['Mid']],[['Carry','Mid','Offlane']],[['Carry','Mid','Offlane','Soft Support','Hard Support']]])('accepts 1-5 unique roles',roles=>expect(joinQueueSchema.parse({regions:['EU West'],roles}).roles).toEqual(roles));
+  it('accepts the legacy primaryRole during a rolling deploy',()=>expect(joinQueueSchema.parse({regions:['EU West'],primaryRole:'Mid'}).roles).toEqual(['Mid']));
+  it('rejects invalid region or role selections',()=>{expect(()=>joinQueueSchema.parse({regions:['EU West','EU East','SEA','US East'],roles:['Mid']})).toThrow();expect(()=>joinQueueSchema.parse({regions:['EU West','EU West'],roles:['Mid']})).toThrow();expect(()=>joinQueueSchema.parse({regions:['EU West'],roles:[]})).toThrow();expect(()=>joinQueueSchema.parse({regions:['EU West'],roles:['Mid','Mid']})).toThrow()});
+  it('rejects secondaryRole',()=>expect(()=>joinQueueSchema.parse({regions:['EU West'],roles:['Mid'],secondaryRole:'Carry'})).toThrow());
   it('selects a deterministic intersection',()=>{const candidates=[{regions:['EU East','EU West']},{regions:['EU West','EU East']}];expect(commonRegions(candidates)).toEqual(['EU East','EU West']);expect(selectMatchRegion(candidates)).toBe('EU East')});
 });
 describe('Steam OpenID security',()=>{
