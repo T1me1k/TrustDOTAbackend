@@ -5,6 +5,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
+import { ZodError } from 'zod';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Env } from './config/env.js';
 import { SERVICE_NAME, VERSION, SESSION_COOKIE, DOTA_ROLES } from './config/constants.js';
@@ -42,7 +43,19 @@ export async function buildApp({ env, db: createDb }: Deps) {
   async function requirePlayer(req: any) { const p = await currentPlayer(req); if (!p) throw unauthorized(); return p; }
   async function cfg(key: string, fallback: any) { const [r] = await database.db.select().from(runtimeConfig).where(eq(runtimeConfig.key, key)).limit(1); return r?.value ?? fallback; }
 
-  app.setErrorHandler((err, req, rep) => { const e = err instanceof ApiError ? err : new ApiError(500, 'INTERNAL_ERROR', 'Internal server error'); req.log.error({ code: e.code, statusCode: e.statusCode, err: err instanceof ApiError ? undefined : err }, 'request failed'); void rep.status(e.statusCode).send({ error: { code: e.code, message: e.message, requestId: req.id } }); });
+  app.setErrorHandler((err, req, rep) => {
+    const validation = err instanceof ZodError;
+    const e = err instanceof ApiError
+      ? err
+      : validation
+        ? new ApiError(400, 'VALIDATION_ERROR', 'Request payload is invalid')
+        : new ApiError(500, 'INTERNAL_ERROR', 'Internal server error');
+    const details = validation
+      ? err.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message }))
+      : undefined;
+    req.log.error({ code: e.code, statusCode: e.statusCode, details, err: err instanceof ApiError || validation ? undefined : err }, 'request failed');
+    void rep.status(e.statusCode).send({ error: { code: e.code, message: e.message, requestId: req.id, ...(details ? { details } : {}) } });
+  });
 
   app.get('/health', async () => ({ status: 'ok', service: SERVICE_NAME, version: VERSION, uptime: Math.floor(process.uptime()) }));
   app.get('/ready', async (_req, rep) => { try { await database.pool.query('select 1'); const rows = await database.pool.query<{ table_name: string }>(`select table_name from information_schema.tables where table_schema='public' and table_name = any($1)`, [requiredTables]); const found = new Set(rows.rows.map((r) => r.table_name)); const missing = requiredTables.filter((t) => !found.has(t)); if (missing.length) throw new Error('missing tables'); return { status: 'ready', database: 'ok', tables: 'ok' }; } catch { rep.status(503); return { status: 'not_ready', database: 'failed' }; } });
