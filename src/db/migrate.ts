@@ -1,8 +1,6 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-
 import { join, resolve } from 'node:path';
-
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { loadEnv } from '../config/env.js';
 import { createDatabase } from './client.js';
@@ -13,16 +11,11 @@ export async function main(): Promise<void> {
   const { db, pool } = createDatabase(env);
 
   try {
-
-    const migrationsFolder = resolve(process.cwd(), 'src', 'db', 'migrations');
+    const migrationsFolder = resolve(process.cwd(), 'dist', 'db', 'migrations');
     const journalPath = join(migrationsFolder, 'meta', '_journal.json');
     if (!existsSync(journalPath)) {
       throw new Error(`Drizzle migration journal is missing: ${journalPath}`);
     }
-
-    const migrationsFolder = ['dist/db/migrations', 'src/db/migrations'].find(existsSync);
-    if (!migrationsFolder) throw new Error('Drizzle migrations directory not found');
-
     await migrate(db, { migrationsFolder });
   } catch (error) {
     failure = error;
