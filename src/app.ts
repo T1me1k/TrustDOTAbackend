@@ -85,7 +85,7 @@ export async function buildApp({ env, db: createDb }: Deps) {
 
   function isAdmin(req: any) { const h = String(req.headers.authorization ?? ''); const token = h.startsWith('Bearer ') ? h.slice(7) : ''; const a = Buffer.from(token); const b = Buffer.from(env.ADMIN_API_KEY); return a.length === b.length && timingSafeEqual(a, b); }
   app.addHook('preHandler', async (req) => { if (req.url.startsWith('/v1/admin') && !isAdmin(req)) throw new ApiError(401, 'ADMIN_UNAUTHORIZED', 'Admin authentication required'); });
-  registerGameSessionRoutes(app,database.pool,lifecycle);
+  registerGameSessionRoutes(app,database.pool,lifecycle,env.DIAGNOSTIC_GAME_SESSIONS_ENABLED);
   registerBalanceRoutes(app,database.pool);
   app.get('/v1/admin/dashboard', async () => adminDashboard(database));
   app.get('/v1/admin/stats',async(req:any)=>adminStats(database,String(req.query?.range??'24h')));
