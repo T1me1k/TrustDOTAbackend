@@ -55,6 +55,34 @@ export function sameRoster(expected: string[], received: string[]) {
   return JSON.stringify(normalize(expected)) === JSON.stringify(normalize(received));
 }
 
+export function buildDiagnosticExpectedRoster(
+  steamId64: string,
+  personaName = 'Diagnostic player',
+): ExpectedPlayer[] {
+  if (!STEAM_ID64.test(steamId64)) {
+    throw new ApiError(400, 'INVALID_STEAM_ID64', 'A valid Steam ID64 is required');
+  }
+  const safePersonaName = personaName.trim().slice(0, 100) || 'Diagnostic player';
+  return [{
+    playerId: `diagnostic:${steamId64}`,
+    steamId64,
+    personaName: safePersonaName,
+    team: 'radiant',
+    role: 'Any',
+    rating: 0,
+  }];
+}
+
+export function assertResultSubmissionAllowed(verificationMode: string) {
+  if (verificationMode === 'development_diagnostic') {
+    throw new ApiError(
+      403,
+      'DIAGNOSTIC_RESULT_FORBIDDEN',
+      'Diagnostic game sessions cannot submit or confirm results',
+    );
+  }
+}
+
 export function validateGameResult(input: GameResultInput) {
   if (
     typeof input.resultId !== 'string'
@@ -79,7 +107,96 @@ export function registerGameSessionRoutes(
   app: FastifyInstance,
   pool: pg.Pool,
   lifecycle: MatchLifecycleService,
+  diagnosticEnabled = false,
 ) {
+  app.get('/v1/admin/game-sessions/diagnostic', async () => {
+    const rows = (await pool.query(
+      `select * from game_sessions
+       where verification_mode='development_diagnostic'
+       order by created_at desc limit 25`,
+    )).rows;
+    return { gameSessions: rows.map(gameSessionDto) };
+  });
+
+  app.post('/v1/admin/game-sessions/diagnostic', async (req: any) => {
+    if (!diagnosticEnabled) {
+      throw new ApiError(
+        404,
+        'DIAGNOSTIC_GAME_SESSIONS_DISABLED',
+        'Diagnostic game sessions are disabled',
+      );
+    }
+
+    const steamId64 = String(req.body?.steamId64 ?? '').trim();
+    const expectedRoster = buildDiagnosticExpectedRoster(
+      steamId64,
+      String(req.body?.personaName ?? 'Diagnostic player'),
+    );
+    const requestedTtl = Number(req.body?.ttlSeconds ?? ISSUE_TTL_SECONDS);
+    const ttlSeconds = Number.isInteger(requestedTtl)
+      ? Math.max(MIN_ISSUE_TTL_SECONDS, Math.min(MAX_ISSUE_TTL_SECONDS, requestedTtl))
+      : ISSUE_TTL_SECONDS;
+    const token = createGameSessionToken();
+    const tokenHash = hashGameSessionToken(token);
+    const sessionId = randomUUID();
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    const client = await pool.connect();
+
+    try {
+      await client.query('begin');
+      await client.query(
+        `update game_sessions
+         set status='revoked',revoked_at=now(),
+             revocation_reason='Replaced by a new diagnostic session',
+             updated_at=now(),row_version=row_version+1
+         where verification_mode='development_diagnostic'
+           and status in('issued','active','result_pending')`,
+      );
+      const session = (await client.query(
+        `insert into game_sessions(
+          id,match_id,token_hash,status,verification_mode,expected_roster,
+          balance_patch_version,expires_at,created_by
+        ) values($1,null,$2,'issued','development_diagnostic',$3,'diagnostic-local',$4,'admin')
+        returning *`,
+        [sessionId, tokenHash, JSON.stringify(expectedRoster), expiresAt],
+      )).rows[0];
+      await client.query(
+        `insert into audit_logs(
+          actor_type,actor_id,action,entity_type,entity_id,new_value,ip_address
+        ) values('admin','bootstrap','game_session.diagnostic_issue','game_session',$1,$2,$3)`,
+        [
+          session.id,
+          {
+            steamId64,
+            expiresAt,
+            verificationMode: session.verification_mode,
+            ratingChangesAllowed: false,
+          },
+          req.ip,
+        ],
+      );
+      await client.query('commit');
+      return {
+        gameSession: gameSessionDto(session),
+        token,
+        tokenType: 'Bearer',
+        bootstrapPath: '/v1/game-sessions/bootstrap',
+        capabilities: {
+          bootstrap: true,
+          heartbeat: true,
+          events: true,
+          result: false,
+          ratingChanges: false,
+        },
+      };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+
   app.post('/v1/admin/matches/:id/game-session', async (req: any) => {
     const requestedTtl = Number(req.body?.ttlSeconds ?? ISSUE_TTL_SECONDS);
     const ttlSeconds = Number.isInteger(requestedTtl)
@@ -210,6 +327,7 @@ export function registerGameSessionRoutes(
       [req.params.id],
     )).rows[0];
     if (!session) throw new ApiError(404, 'GAME_SESSION_NOT_FOUND', 'Game session not found');
+    assertResultSubmissionAllowed(session.verification_mode);
     if (session.status === 'completed') {
       return { gameSession: gameSessionDto(session), idempotent: true };
     }
@@ -302,10 +420,22 @@ export function registerGameSessionRoutes(
             },
           ],
         )).rows[0];
-        const match = (await client.query(
-          'select id,room_code,region,status,balance_patch_version from matches where id=$1',
-          [session.match_id],
-        )).rows[0];
+        const diagnostic = session.verification_mode === 'development_diagnostic';
+        const match = diagnostic
+          ? {
+              id: null,
+              room_code: 'DIAGNOSTIC',
+              region: 'Local',
+              status: 'diagnostic',
+              balance_patch_version: 'diagnostic-local',
+            }
+          : (await client.query(
+              'select id,room_code,region,status,balance_patch_version from matches where id=$1',
+              [session.match_id],
+            )).rows[0];
+        if (!match) {
+          throw new ApiError(404, 'MATCH_NOT_FOUND', 'Match not found for game session');
+        }
         await client.query('commit');
         return {
           gameSession: gameSessionDto(updated),
@@ -316,6 +446,7 @@ export function registerGameSessionRoutes(
             status: match.status,
             balancePatchVersion: match.balance_patch_version,
             roster: updated.expected_roster,
+            diagnostic,
           },
         };
       } catch (error) {
@@ -379,11 +510,12 @@ export function registerGameSessionRoutes(
     async (req: any) => {
       const tokenHash = bearerTokenHash(req);
       const input = req.body as GameResultInput;
-      validateGameResult(input);
       const client = await pool.connect();
       try {
         await client.query('begin');
         const session = await lockedTokenSession(client, tokenHash, req.params.id);
+        assertResultSubmissionAllowed(session.verification_mode);
+        validateGameResult(input);
         if (['result_pending', 'completed'].includes(session.status)) {
           if (session.result_id === input.resultId) {
             await client.query('commit');
