@@ -54,6 +54,7 @@ describe('production frontend backend readiness', () => {
       '0003_balance_studio',
       '0004_game_sessions',
       '0005_multi_role_matchmaking',
+      '0006_diagnostic_game_sessions',
     ]);
   });
 

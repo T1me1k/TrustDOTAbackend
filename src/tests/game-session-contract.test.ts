@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertResultSubmissionAllowed,
+  buildDiagnosticExpectedRoster,
   createGameSessionToken,
   hashGameSessionToken,
   sameRoster,
@@ -20,6 +22,23 @@ describe('game session contract', () => {
   it('compares rosters without trusting order and rejects duplicates', () => {
     expect(sameRoster(roster, [...roster].reverse())).toBe(true);
     expect(sameRoster(roster, [...roster.slice(0, 9), roster[0]!])).toBe(false);
+  });
+
+  it('builds a one-player diagnostic roster with zero rating authority', () => {
+    const diagnostic = buildDiagnosticExpectedRoster('76561199149964045', 'TRUST developer');
+    expect(diagnostic).toHaveLength(1);
+    expect(diagnostic[0]).toMatchObject({
+      steamId64: '76561199149964045',
+      personaName: 'TRUST developer',
+      team: 'radiant',
+      rating: 0,
+    });
+    expect(() => buildDiagnosticExpectedRoster('invalid')).toThrow();
+  });
+
+  it('forbids result submission for diagnostic sessions', () => {
+    expect(() => assertResultSubmissionAllowed('development_diagnostic')).toThrow();
+    expect(() => assertResultSubmissionAllowed('unverified_valve_hosted')).not.toThrow();
   });
 
   it('validates a complete ten-player result', () => {
