@@ -50,6 +50,13 @@
       "when": 1785106800000,
       "tag": "0006_diagnostic_game_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785110400000,
+      "tag": "0007_staging_game_sessions",
+      "breakpoints": true
     }
   ]
 }
