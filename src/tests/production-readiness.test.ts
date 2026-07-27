@@ -56,6 +56,7 @@ describe('production frontend backend readiness', () => {
       '0004_game_sessions',
       '0005_multi_role_matchmaking',
       '0006_diagnostic_game_sessions',
+      '0007_staging_game_sessions',
     ]);
     expect(entries.map(entry => entry.idx)).toEqual(entries.map((_entry, index) => index));
     for (let index = 1; index < entries.length; index += 1) {
