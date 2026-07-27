@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertResultConfirmationAllowed,
   assertResultSubmissionAllowed,
   buildDiagnosticExpectedRoster,
+  buildStagingExpectedRoster,
   createGameSessionToken,
   hashGameSessionToken,
   sameRoster,
@@ -36,9 +38,26 @@ describe('game session contract', () => {
     expect(() => buildDiagnosticExpectedRoster('invalid')).toThrow();
   });
 
-  it('forbids result submission for diagnostic sessions', () => {
+  it('builds a unique 1-10 player staging roster without rating authority', () => {
+    const staging = buildStagingExpectedRoster([
+      { steamId64: roster[0], personaName: 'One', team: 'radiant', role: 'Mid' },
+      { steamId64: roster[1], personaName: 'Two', team: 'dire', role: 'Carry' },
+    ]);
+    expect(staging).toHaveLength(2);
+    expect(staging.map(player => player.team)).toEqual(['radiant', 'dire']);
+    expect(staging.every(player => player.rating === 0)).toBe(true);
+    expect(() => buildStagingExpectedRoster([])).toThrow();
+    expect(() => buildStagingExpectedRoster([
+      { steamId64: roster[0] },
+      { steamId64: roster[0] },
+    ])).toThrow();
+  });
+
+  it('separates diagnostic submission from staging confirmation safety', () => {
     expect(() => assertResultSubmissionAllowed('development_diagnostic')).toThrow();
-    expect(() => assertResultSubmissionAllowed('unverified_valve_hosted')).not.toThrow();
+    expect(() => assertResultSubmissionAllowed('development_staging')).not.toThrow();
+    expect(() => assertResultConfirmationAllowed('development_staging')).toThrow();
+    expect(() => assertResultConfirmationAllowed('unverified_valve_hosted')).not.toThrow();
   });
 
   it('validates a complete ten-player result', () => {
@@ -51,6 +70,25 @@ describe('game session contract', () => {
       balancePatchVersion: '1.0.0',
       rosterSteamIds: roster,
     })).not.toThrow();
+  });
+
+  it('validates a partial staging roster against its expected size', () => {
+    expect(() => validateGameResult({
+      resultId: 'staging-result-0001',
+      winner: 'radiant',
+      radiantScore: 2,
+      direScore: 1,
+      durationSeconds: 90,
+      rosterSteamIds: roster.slice(0, 2),
+    }, 2)).not.toThrow();
+    expect(() => validateGameResult({
+      resultId: 'staging-result-0002',
+      winner: 'radiant',
+      radiantScore: 2,
+      direScore: 1,
+      durationSeconds: 90,
+      rosterSteamIds: roster.slice(0, 1),
+    }, 2)).toThrow();
   });
 
   it('accepts the Ancient winner independently of kill count', () => {

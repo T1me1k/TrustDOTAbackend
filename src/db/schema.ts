@@ -46,7 +46,7 @@ export const auditLogs = pgTable('audit_logs', { id: uuid('id').primaryKey().def
 
 export const gameSessions = pgTable('game_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
-  matchId: uuid('match_id').references(() => matches.id, { onDelete: 'cascade' }).notNull(),
+  matchId: uuid('match_id').references(() => matches.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull(),
   status: text('status').notNull().default('issued'),
   verificationMode: text('verification_mode').notNull().default('unverified_valve_hosted'),
@@ -74,7 +74,7 @@ export const gameSessions = pgTable('game_sessions', {
   activeMatch: uniqueIndex('game_sessions_one_active_match_idx').on(t.matchId).where(sql`${t.status} in ('issued','active','result_pending')`),
   statusExpiry: index('game_sessions_status_expiry_idx').on(t.status, t.expiresAt),
   statusCheck: check('game_sessions_status_check', sql`${t.status} in ('issued','active','result_pending','completed','expired','revoked')`),
-  verificationCheck: check('game_sessions_verification_check', sql`${t.verificationMode} in ('unverified_valve_hosted','development_diagnostic')`),
+  verificationCheck: check('game_sessions_verification_check', sql`${t.verificationMode} in ('unverified_valve_hosted','development_diagnostic','development_staging')`),
   rowVersionCheck: check('game_sessions_row_version_check', sql`${t.rowVersion} > 0`),
 }));
 

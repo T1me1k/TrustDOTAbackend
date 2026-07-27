@@ -73,6 +73,52 @@ export function buildDiagnosticExpectedRoster(
   }];
 }
 
+export type StagingPlayerInput = {
+  steamId64: string;
+  personaName?: string;
+  team?: 'radiant' | 'dire';
+  role?: string;
+};
+
+export function buildStagingExpectedRoster(input: unknown): ExpectedPlayer[] {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 10) {
+    throw new ApiError(400, 'INVALID_STAGING_ROSTER', 'Staging roster must contain 1 to 10 players');
+  }
+
+  const seen = new Set<string>();
+  let radiant = 0;
+  let dire = 0;
+  const roster = input.map((value, index) => {
+    const player = (value ?? {}) as StagingPlayerInput;
+    const steamId64 = String(player.steamId64 ?? '').trim();
+    if (!STEAM_ID64.test(steamId64) || seen.has(steamId64)) {
+      throw new ApiError(400, 'INVALID_STAGING_ROSTER', 'Every staging player needs a unique Steam ID64');
+    }
+    seen.add(steamId64);
+
+    const team = player.team === 'radiant' || player.team === 'dire'
+      ? player.team
+      : index < 5 ? 'radiant' : 'dire';
+    if (team === 'radiant') radiant += 1;
+    else dire += 1;
+    if (radiant > 5 || dire > 5) {
+      throw new ApiError(400, 'INVALID_STAGING_ROSTER', 'Staging teams may contain at most five real players each');
+    }
+
+    return {
+      playerId: `staging:${steamId64}`,
+      steamId64,
+      personaName: String(player.personaName ?? `Staging player ${index + 1}`).trim().slice(0, 100)
+        || `Staging player ${index + 1}`,
+      team,
+      role: String(player.role ?? 'Any').trim().slice(0, 50) || 'Any',
+      rating: 0,
+    };
+  });
+
+  return roster;
+}
+
 export function assertResultSubmissionAllowed(verificationMode: string) {
   if (verificationMode === 'development_diagnostic') {
     throw new ApiError(
@@ -83,16 +129,30 @@ export function assertResultSubmissionAllowed(verificationMode: string) {
   }
 }
 
-export function validateGameResult(input: GameResultInput) {
+export function assertResultConfirmationAllowed(verificationMode: string) {
+  if (verificationMode !== 'unverified_valve_hosted') {
+    throw new ApiError(
+      403,
+      'GAME_RESULT_CONFIRMATION_FORBIDDEN',
+      'Only rated Valve-hosted sessions can apply a confirmed result',
+    );
+  }
+}
+
+export function validateGameResult(input: GameResultInput, expectedRosterSize = 10) {
   if (
     typeof input.resultId !== 'string'
     || input.resultId.length < 8
     || input.resultId.length > 128
+    || !Number.isInteger(expectedRosterSize)
+    || expectedRosterSize < 1
+    || expectedRosterSize > 10
     || !Array.isArray(input.rosterSteamIds)
-    || input.rosterSteamIds.length !== 10
+    || input.rosterSteamIds.length !== expectedRosterSize
+    || new Set(input.rosterSteamIds).size !== expectedRosterSize
     || input.rosterSteamIds.some((id) => !STEAM_ID64.test(id))
   ) {
-    throw new ApiError(400, 'INVALID_GAME_RESULT', 'Result id and the 10-player Steam roster are required');
+    throw new ApiError(400, 'INVALID_GAME_RESULT', `Result id and the ${expectedRosterSize}-player Steam roster are required`);
   }
   validateCompletion({
     winner: input.winner,
@@ -108,7 +168,94 @@ export function registerGameSessionRoutes(
   pool: pg.Pool,
   lifecycle: MatchLifecycleService,
   diagnosticEnabled = false,
+  stagingEnabled = false,
 ) {
+  app.get('/v1/admin/game-sessions/staging', async () => {
+    const rows = (await pool.query(
+      `select * from game_sessions
+       where verification_mode='development_staging'
+       order by created_at desc limit 25`,
+    )).rows;
+    return { gameSessions: rows.map(gameSessionDto) };
+  });
+
+  app.post('/v1/admin/game-sessions/staging', async (req: any) => {
+    if (!stagingEnabled) {
+      throw new ApiError(
+        404,
+        'STAGING_GAME_SESSIONS_DISABLED',
+        'Staging game sessions are disabled',
+      );
+    }
+
+    const expectedRoster = buildStagingExpectedRoster(req.body?.players);
+    const requestedTtl = Number(req.body?.ttlSeconds ?? ISSUE_TTL_SECONDS);
+    const ttlSeconds = Number.isInteger(requestedTtl)
+      ? Math.max(MIN_ISSUE_TTL_SECONDS, Math.min(MAX_ISSUE_TTL_SECONDS, requestedTtl))
+      : ISSUE_TTL_SECONDS;
+    const token = createGameSessionToken();
+    const tokenHash = hashGameSessionToken(token);
+    const sessionId = randomUUID();
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    const client = await pool.connect();
+
+    try {
+      await client.query('begin');
+      await client.query(
+        `update game_sessions
+         set status='revoked',revoked_at=now(),
+             revocation_reason='Replaced by a new staging session',
+             updated_at=now(),row_version=row_version+1
+         where verification_mode='development_staging'
+           and status in('issued','active','result_pending')`,
+      );
+      const session = (await client.query(
+        `insert into game_sessions(
+          id,match_id,token_hash,status,verification_mode,expected_roster,
+          balance_patch_version,expires_at,created_by
+        ) values($1,null,$2,'issued','development_staging',$3,'staging-local',$4,'admin')
+        returning *`,
+        [sessionId, tokenHash, JSON.stringify(expectedRoster), expiresAt],
+      )).rows[0];
+      await client.query(
+        `insert into audit_logs(
+          actor_type,actor_id,action,entity_type,entity_id,new_value,ip_address
+        ) values('admin','bootstrap','game_session.staging_issue','game_session',$1,$2,$3)`,
+        [
+          session.id,
+          {
+            playerCount: expectedRoster.length,
+            steamIds: expectedRoster.map((player) => player.steamId64),
+            expiresAt,
+            verificationMode: session.verification_mode,
+            ratingChangesAllowed: false,
+          },
+          req.ip,
+        ],
+      );
+      await client.query('commit');
+      return {
+        gameSession: gameSessionDto(session),
+        token,
+        tokenType: 'Bearer',
+        bootstrapPath: '/v1/game-sessions/bootstrap',
+        capabilities: {
+          bootstrap: true,
+          heartbeat: true,
+          events: true,
+          result: true,
+          resultConfirmation: false,
+          ratingChanges: false,
+        },
+      };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+
   app.get('/v1/admin/game-sessions/diagnostic', async () => {
     const rows = (await pool.query(
       `select * from game_sessions
@@ -327,7 +474,7 @@ export function registerGameSessionRoutes(
       [req.params.id],
     )).rows[0];
     if (!session) throw new ApiError(404, 'GAME_SESSION_NOT_FOUND', 'Game session not found');
-    assertResultSubmissionAllowed(session.verification_mode);
+    assertResultConfirmationAllowed(session.verification_mode);
     if (session.status === 'completed') {
       return { gameSession: gameSessionDto(session), idempotent: true };
     }
@@ -421,13 +568,14 @@ export function registerGameSessionRoutes(
           ],
         )).rows[0];
         const diagnostic = session.verification_mode === 'development_diagnostic';
-        const match = diagnostic
+        const staging = session.verification_mode === 'development_staging';
+        const match = diagnostic || staging
           ? {
               id: null,
-              room_code: 'DIAGNOSTIC',
+              room_code: diagnostic ? 'DIAGNOSTIC' : 'STAGING',
               region: 'Local',
-              status: 'diagnostic',
-              balance_patch_version: 'diagnostic-local',
+              status: diagnostic ? 'diagnostic' : 'staging',
+              balance_patch_version: diagnostic ? 'diagnostic-local' : 'staging-local',
             }
           : (await client.query(
               'select id,room_code,region,status,balance_patch_version from matches where id=$1',
@@ -447,6 +595,8 @@ export function registerGameSessionRoutes(
             balancePatchVersion: match.balance_patch_version,
             roster: updated.expected_roster,
             diagnostic,
+            staging,
+            ratingEligible: !diagnostic && !staging,
           },
         };
       } catch (error) {
@@ -515,7 +665,11 @@ export function registerGameSessionRoutes(
         await client.query('begin');
         const session = await lockedTokenSession(client, tokenHash, req.params.id);
         assertResultSubmissionAllowed(session.verification_mode);
-        validateGameResult(input);
+        const expected = (session.expected_roster as ExpectedPlayer[]).map((p) => p.steamId64);
+        validateGameResult(
+          input,
+          session.verification_mode === 'development_staging' ? expected.length : 10,
+        );
         if (['result_pending', 'completed'].includes(session.status)) {
           if (session.result_id === input.resultId) {
             await client.query('commit');
@@ -524,16 +678,55 @@ export function registerGameSessionRoutes(
           throw new ApiError(409, 'GAME_RESULT_CONFLICT', 'A different result already exists');
         }
         ensureUsableSession(session, ['active']);
-        const expected = (session.expected_roster as ExpectedPlayer[]).map((p) => p.steamId64);
         if (!sameRoster(expected, input.rosterSteamIds)) {
           throw new ApiError(409, 'GAME_ROSTER_MISMATCH', 'Reported roster does not match the issued game session');
         }
         if (
-          session.balance_patch_version
+          session.verification_mode !== 'development_staging'
+          && session.balance_patch_version
           && input.balancePatchVersion !== session.balance_patch_version
         ) {
           throw new ApiError(409, 'BALANCE_VERSION_MISMATCH', 'Reported balance version does not match the pinned match version');
         }
+        if (session.verification_mode === 'development_staging') {
+          const updated = (await client.query(
+            `update game_sessions
+             set status='completed',result_id=$2,result_payload=$3,
+                 result_submitted_at=now(),completed_at=now(),last_heartbeat_at=now(),
+                 server_state='completed',updated_at=now(),row_version=row_version+1
+             where id=$1 returning *`,
+            [session.id, input.resultId, input],
+          )).rows[0];
+          await client.query(
+            `insert into game_session_events(session_id,event_id,type,payload)
+             values($1,$2,'game_ended',$3)
+             on conflict(session_id,event_id) do nothing`,
+            [session.id, input.resultId, { ...input, ratingChangesAllowed: false }],
+          );
+          await client.query(
+            `insert into audit_logs(
+              actor_type,actor_id,action,entity_type,entity_id,new_value
+            ) values('system',$1,'game_session.staging_completed','game_session',$1,$2)`,
+            [
+              session.id,
+              {
+                resultId: input.resultId,
+                verificationMode: session.verification_mode,
+                status: 'completed',
+                ratingApplied: false,
+              },
+            ],
+          );
+          await client.query('commit');
+          return {
+            gameSession: gameSessionDto(updated),
+            idempotent: false,
+            ratingApplied: false,
+            confirmationRequired: false,
+            staging: true,
+          };
+        }
+
         const match = (await client.query(
           'select status from matches where id=$1 for update',
           [session.match_id],
@@ -647,5 +840,10 @@ function gameSessionDto(session: any) {
     createdAt: session.created_at,
     updatedAt: session.updated_at,
     rowVersion: session.row_version,
+    capabilities: {
+      result: session.verification_mode !== 'development_diagnostic',
+      resultConfirmation: session.verification_mode === 'unverified_valve_hosted',
+      ratingChanges: session.verification_mode === 'unverified_valve_hosted',
+    },
   };
 }
