@@ -46,7 +46,7 @@ export const auditLogs = pgTable('audit_logs', { id: uuid('id').primaryKey().def
 
 export const gameSessions = pgTable('game_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
-  matchId: uuid('match_id').references(() => matches.id, { onDelete: 'cascade' }).notNull(),
+  matchId: uuid('match_id').references(() => matches.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull(),
   status: text('status').notNull().default('issued'),
   verificationMode: text('verification_mode').notNull().default('unverified_valve_hosted'),
