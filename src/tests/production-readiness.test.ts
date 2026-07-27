@@ -47,7 +47,8 @@ describe('production frontend backend readiness', () => {
 
   it('keeps the complete migration journal', async () => {
     const journal = JSON.parse(await readFile('src/db/migrations/meta/_journal.json', 'utf8'));
-    expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual([
+    const entries = journal.entries as Array<{ idx: number; tag: string; when: number }>;
+    expect(entries.map(entry => entry.tag)).toEqual([
       '0000_initial',
       '0001_narrow_marvel_boy',
       '0002_bitter_morlocks',
@@ -56,6 +57,10 @@ describe('production frontend backend readiness', () => {
       '0005_multi_role_matchmaking',
       '0006_diagnostic_game_sessions',
     ]);
+    expect(entries.map(entry => entry.idx)).toEqual(entries.map((_entry, index) => index));
+    for (let index = 1; index < entries.length; index += 1) {
+      expect(entries[index]!.when).toBeGreaterThan(entries[index - 1]!.when);
+    }
   });
 
   it('prints the idempotent seed completion message for repeatable seed checks', async () => {
@@ -74,6 +79,10 @@ describe('production frontend backend readiness', () => {
     expect(packageJson.scripts['db:migrate:dev']).toBe('tsx src/db/migrate.ts');
     expect(packageJson.scripts['db:seed:dev']).toBe('tsx src/db/seed.ts');
     expect(packageJson.scripts.build).toContain('node scripts/copy-migrations.mjs');
+
+    const migrateSource = await readFile('src/db/migrate.ts', 'utf8');
+    expect(migrateSource).toContain('Migration journal timestamps must be strictly increasing');
+    expect(migrateSource).toContain('Database migrations completed');
 
     const dockerfile = await readFile('Dockerfile', 'utf8');
     expect(dockerfile).toContain('COPY scripts ./scripts');

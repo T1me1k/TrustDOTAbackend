@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -16,6 +16,25 @@ export async function main(): Promise<void> {
     if (!existsSync(journalPath)) {
       throw new Error(`Drizzle migration journal is missing: ${journalPath}`);
     }
+
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+      entries?: Array<{ tag?: string; when?: number }>;
+    };
+    const entries = journal.entries ?? [];
+    for (let index = 1; index < entries.length; index += 1) {
+      const previous = entries[index - 1];
+      const current = entries[index];
+      if (
+        typeof previous?.when !== 'number'
+        || typeof current?.when !== 'number'
+        || current.when <= previous.when
+      ) {
+        throw new Error(
+          `Migration journal timestamps must be strictly increasing: ${previous?.tag ?? index - 1} -> ${current?.tag ?? index}`,
+        );
+      }
+    }
+
     await migrate(db, { migrationsFolder });
   } catch (error) {
     failure = error;
@@ -32,7 +51,7 @@ export async function main(): Promise<void> {
   if (failure) {
     process.exitCode = 1;
   } else {
-    console.log('Balance migrations completed');
+    console.log('Database migrations completed');
   }
 }
 
